@@ -1,0 +1,9 @@
+(function(){
+const KEY='scholars_quest_telemetry_queue_v1';let queue=[];try{queue=JSON.parse(localStorage.getItem(KEY)||'[]')}catch{}
+const persist=()=>{try{localStorage.setItem(KEY,JSON.stringify(queue.slice(-2000)))}catch{}};
+let activeStart=Date.now(),lastActive=Date.now();
+function record(q,correct,mode){if(!q)return;queue.push({question_id:String(q.id||'').slice(0,150),question_text:String(q.question||'').slice(0,2500),correct:!!correct,category:String(q.category||'General Knowledge').slice(0,100),difficulty:String(q.difficulty||'Unspecified').slice(0,50),source:String(q.source||mode||'Quest').slice(0,120),mode,answered_at:new Date().toISOString()});persist();flush()}
+async function flush(){const c=window.QuestCloud;if(!c?.uid||!c.client||!queue.length)return;const batch=queue.slice(0,100);const {error}=await c.client.from('answer_events').insert(batch.map(x=>({...x,user_id:c.uid})));if(!error){queue.splice(0,batch.length);persist();if(queue.length)flush()}else console.warn('Telemetry queued:',error.message)}
+async function heartbeat(){const c=window.QuestCloud;if(!c?.uid||!c.client||document.hidden)return;const now=Date.now();const seconds=Math.min(60,Math.max(0,Math.floor((now-activeStart)/1000)));activeStart=now;if(seconds<1)return;const {error}=await c.client.from('play_sessions').insert({user_id:c.uid,seconds,recorded_at:new Date().toISOString()});if(error)console.warn('Playtime pending:',error.message)}
+document.addEventListener('visibilitychange',()=>{if(document.hidden){heartbeat()}else activeStart=Date.now()});setInterval(()=>{flush();heartbeat()},30000);window.QuestTelemetry={record,flush};
+})();
