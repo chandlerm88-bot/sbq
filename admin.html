@@ -5,6 +5,18 @@
 <section id="login" class="card"><h2>Administrator sign in</h2><p class="muted">Sign in with your administrator account. Only accounts manually granted admin access in Supabase can manage questions.</p><form id="loginForm"><label>Username</label><input id="username" autocomplete="username" required><label>8–12 digit PIN</label><input id="pin" type="password" inputmode="numeric" autocomplete="current-password" required minlength="8" maxlength="12"><p><button>Sign in</button></p></form></section>
 <section id="workspace" class="hidden"><section class="card"><h2>📊 Noah’s Learning Dashboard</h2><p class="muted">Answer history, category accuracy, play time and current game progress. Refresh for the latest data.</p><div class="row"><div><label>Student account</label><select id="studentSelect"><option value="">Select Noah</option></select></div><div style="align-self:end"><button id="loadDashboard" class="secondary">Refresh dashboard</button></div></div><div id="dashboard"><p class="muted">Choose the student account above.</p></div></section><div class="row"><div class="card"><h2>Question Library</h2><p id="totals">Loading…</p><button class="secondary" id="refresh">Refresh</button></div><div class="card"><h2>Publish workflow</h2><p class="muted">Upload JSON → preview → save as draft → publish when ready. Published packs appear in the Student Game when a student signs in.</p><button class="secondary" id="logout">Sign out</button></div></div>
 <div class="card"><h2 id="editTitle">Add question pack</h2><label>Pack title</label><input id="packTitle" placeholder="2024 Middle School Practice Set"><label>Question bank JSON</label><input id="file" type="file" accept=".json,application/json"><p class="muted">Supports an array of questions or an object containing <code>questions</code>. A question needs <code>question</code> and <code>answer</code>; optional <code>category</code>, <code>difficulty</code>, <code>type</code>, <code>source</code>, <code>explanation</code>.</p><textarea id="json" placeholder='[{"question":"Which planet is known as the Red Planet?","answer":"Mars","category":"Science","difficulty":"Beginner"}]'></textarea><div class="row"><button id="validate" class="secondary">Validate & Preview</button><button id="saveDraft">Save draft</button><button id="publish">Publish to students</button><button id="clear" class="secondary">Clear editor</button></div><p id="validation"></p></div>
+<div class="card"><h2>🏫 School Work controls</h2>
+<p class="muted">When <b>School Work Only</b> is on, the game shows only Math and History — Scholars Bowl, arcade, shop and pet games are hidden and ticket spending is blocked by the server. Separately, games always stay locked each day until a quiz is passed with 90% or higher (resets at midnight Central).</p>
+<div class="row"><button id="schoolToggle">Loading…</button><button id="scoresRefresh" class="secondary">Refresh scores</button></div>
+<h3>Recent quiz scores</h3><div id="scoreList" class="muted">Loading…</div></div>
+<div class="card"><h2>📸 Study Guide Builder</h2>
+<p class="muted">Snap photos of textbook pages, flash cards, worksheets or a computer screen. AI reads them and writes a question pack into the editor above — review it, then Save draft or Publish. Your API key is stored only in this browser, never in the website files.</p>
+<label>Anthropic API key (console.anthropic.com → API keys)</label><input id="aiKey" type="password" placeholder="sk-ant-...">
+<div class="row"><div><label>Model</label><input id="aiModel" value="claude-sonnet-4-5"></div><div><label>Subject name for these questions</label><input id="aiSubject" placeholder="Chapter 13 Science"></div></div>
+<label>Photos (you can pick several)</label><input id="aiPhotos" type="file" accept="image/*" capture="environment" multiple>
+<div id="aiThumbs" class="row"></div>
+<div class="row"><button id="aiGenerate">✨ Generate questions</button></div>
+<p id="aiStatus" class="muted"></p></div>
 <div class="card"><h2>Existing question packs</h2><div id="packs"></div></div></section>
 </main><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script><script src="config.js"></script><script src="cloud.js"></script><script>
 const $=id=>document.getElementById(id);const cloud=window.QuestCloud;let editing=null,packs=[];
@@ -19,4 +31,39 @@ $('validate').onclick=preview;
 async function save(published){const qs=preview();if(!qs)return;const title=$('packTitle').value.trim();if(!title){status('Please enter a pack title.');return}try{let p={title,questions:qs,published,updated_at:new Date().toISOString()};if(editing)p.id=editing;let result=await cloud.upsertPack(p);editing=result.id;status(published?'Question pack published!':'Draft saved.');await list()}catch(e){status(e.message)}}
 $('saveDraft').onclick=()=>save(false);$('publish').onclick=()=>save(true);$('clear').onclick=()=>{editing=null;$('packTitle').value='';$('json').value='';$('validation').textContent='';$('editTitle').textContent='Add question pack'};$('refresh').onclick=()=>list().catch(e=>status(e.message));$('logout').onclick=async()=>{await cloud.logout();location.reload()};
 if(!cloud.ready)status('Set up config.js with your Supabase URL and publishable key.');else cloud.restore().then(u=>{if(u)showWorkspace()}).catch(e=>status(e.message));
+
+/* ===== School Work controls ===== */
+let schoolOnly=false;
+async function loadSchool(){try{const s=await cloud.getSettings();schoolOnly=String(s.school_only)==='true'||s.school_only===true;$('schoolToggle').textContent=schoolOnly?'🔴 School Work Only is ON — tap to turn OFF':'🟢 School Work Only is OFF — tap to turn ON';$('schoolToggle').className=schoolOnly?'danger':'secondary'}catch(e){$('schoolToggle').textContent='Settings unavailable: '+e.message}}
+$('schoolToggle').onclick=async()=>{try{await cloud.setSetting('school_only',!schoolOnly);await loadSchool();status(schoolOnly?'School Work Only is ON. Noah sees only Math and History.':'School Work Only is OFF.')}catch(e){status(e.message)}};
+async function loadScores(){try{const rows=await cloud.listScores(25);if(!rows.length){$('scoreList').textContent='No quizzes taken yet.';return}
+$('scoreList').innerHTML=rows.map(r=>{const d=new Date(r.created_at).toLocaleString('en-US',{timeZone:'America/Chicago',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});const misses=(r.detail||[]).filter(x=>x&&x.right===false);const missTxt=misses.length?'<br><small>Missed: '+misses.slice(0,8).map(m=>escapeHtml(String(m.q))+' → '+escapeHtml(String(m.correct??m.answer??''))).join(' • ')+(misses.length>8?' …':'')+'</small>':'';
+return '<p>'+(r.pct>=90?'✅':'❌')+' <b>'+escapeHtml(r.subject)+'</b> '+r.correct+'/'+r.total+' ('+r.pct+'%) — '+d+missTxt+'</p>'}).join('')}catch(e){$('scoreList').textContent=e.message}}
+$('scoresRefresh').onclick=loadScores;
+
+/* ===== Study Guide Builder ===== */
+$('aiKey').value=localStorage.getItem('sbq_ai_key')||'';$('aiModel').value=localStorage.getItem('sbq_ai_model')||'claude-sonnet-4-5';
+$('aiKey').onchange=()=>localStorage.setItem('sbq_ai_key',$('aiKey').value.trim());$('aiModel').onchange=()=>localStorage.setItem('sbq_ai_model',$('aiModel').value.trim());
+let aiImages=[];
+function resizeImage(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const max=1568;let w=img.width,h=img.height;const s=Math.min(1,max/Math.max(w,h));w=Math.round(w*s);h=Math.round(h*s);const c=document.createElement('canvas');c.width=w;c.height=h;c.getContext('2d').drawImage(img,0,0,w,h);res(c.toDataURL('image/jpeg',0.85).split(',')[1]);URL.revokeObjectURL(img.src)};img.onerror=()=>rej(Error('Could not read '+file.name));img.src=URL.createObjectURL(file)})}
+$('aiPhotos').onchange=async e=>{aiImages=[];$('aiThumbs').replaceChildren();for(const f of e.target.files){try{const data=await resizeImage(f);aiImages.push(data);const im=document.createElement('img');im.src='data:image/jpeg;base64,'+data;im.style.cssText='width:90px;height:90px;object-fit:cover;border-radius:10px;border:1px solid #6984ba;flex:none';$('aiThumbs').append(im)}catch(err){$('aiStatus').textContent=err.message}}
+$('aiStatus').textContent=aiImages.length+' photo(s) ready.'};
+$('aiGenerate').onclick=async()=>{const key=$('aiKey').value.trim(),model=$('aiModel').value.trim()||'claude-sonnet-4-5',subject=$('aiSubject').value.trim()||'Study Guide';
+if(!key){$('aiStatus').textContent='Paste your API key first.';return}
+if(!aiImages.length){$('aiStatus').textContent='Add at least one photo.';return}
+$('aiGenerate').disabled=true;$('aiStatus').textContent='🤖 Reading your photos… (15–60 seconds)';
+const content=aiImages.map(d=>({type:'image',source:{type:'base64',media_type:'image/jpeg',data:d}}));
+content.push({type:'text',text:'These photos are school study material for an elementary school student (textbook pages, flash cards, worksheets or a screen). Create a thorough study-question set covering EVERYTHING in the photos: every vocabulary term (ask definition-to-term AND term-to-definition), every person and their key facts, every date, fact and fill-in-the-blank, and any printed questions with their answers. If a worksheet blank\'s answer is not in the photos, use the standard curriculum answer. Respond with ONLY a JSON array, no markdown fences, no commentary. Each element: {"question":"...","answer":"...","category":'+JSON.stringify(subject)+',"difficulty":"Beginner"|"Intermediate"|"Advanced"}. Vocabulary=Beginner, facts/people=Intermediate, explain-why questions=Advanced. Aim for complete coverage, typically 40-120 questions.'});
+try{const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model,max_tokens:8000,messages:[{role:'user',content}]})});
+const data=await resp.json();if(data.error)throw Error(data.error.message||'API error');
+let text=(data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+text=text.replace(/```json/gi,'').replace(/```/g,'').trim();const start=text.indexOf('[');const end=text.lastIndexOf(']');if(start<0||end<0)throw Error('The AI reply was not a question list. Try again.');
+const qs=JSON.parse(text.slice(start,end+1));if(!Array.isArray(qs)||!qs.length)throw Error('No questions found. Try clearer photos.');
+$('json').value=JSON.stringify(qs,null,2);if(!$('packTitle').value)$('packTitle').value=subject;preview();
+$('aiStatus').textContent='✅ '+qs.length+' questions written into the editor above. Review them, fix anything, then Save draft or Publish.';window.scrollTo({top:0,behavior:'smooth'})}
+catch(e){$('aiStatus').textContent='⚠ '+e.message}
+finally{$('aiGenerate').disabled=false}};
+
+const _showWorkspace=showWorkspace;showWorkspace=async function(){await _showWorkspace();if(!$('workspace').classList.contains('hidden')){loadSchool();loadScores()}};
+if(!$('login').classList.contains('hidden')){}else{loadSchool();loadScores()}
 </script><script src="dashboard.js"></script></body></html>
